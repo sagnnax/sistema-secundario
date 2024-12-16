@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
+import requests
 from sqlalchemy.orm import Session
 from config.database import SessionLocal
 from schemas.schemas import Paciente, PacienteCreate, PacienteUpdate
 from crud.paciente_crud import create_paciente, get_pacientes, get_paciente_by_id, update_paciente, delete_paciente
+from datetime import datetime
+
 
 
 router = APIRouter()
@@ -13,7 +16,8 @@ def get_db():
         yield db
     finally:
         db.close()
-
+        
+FHIR_SERVER_URL = "http://localhost:8080/fhir/Patient"
 
 @router.post("/pacientes/", response_model=Paciente)
 def agregar_paciente(paciente: PacienteCreate, db: Session = Depends(get_db)):
@@ -54,4 +58,33 @@ def eliminar_paciente(id_paciente: int, db: Session = Depends(get_db)):
     else:
         db_paciente = delete_paciente(db, db_paciente)
         return db_paciente
-
+    
+@router.get("/patient/")
+def get_patient_by_full_name(name: str):
+    response = requests.get(f"{FHIR_SERVER_URL}?given={name}")
+    if response.status_code == 200:
+        data = response.json()
+        if data['total'] > 0:
+            patient = data['entry'][0]['resource']
+            birth_date = patient.get('birthDate', None)
+            age = None
+            if birth_date:
+                birth_date = datetime.strptime(birth_date, "%Y-%m-%d")
+                today = datetime.today()
+                age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+            
+            gender = patient.get('gender', "")
+            if gender == "male":
+                gender = "M"
+            elif gender == "female":
+                gender = "F"
+                  
+            return {
+                "name": patient['name'][0]['given'][0],
+                "occupation": patient.get('extension', [{}])[0].get('valueString', ""),
+                "gender": gender,
+                "age": age,
+                "phone": patient.get('telecom', [{}])[0].get('value', "")
+            }
+            
+    return {"error": "Patient not found"}
